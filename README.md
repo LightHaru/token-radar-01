@@ -1,9 +1,5 @@
 # Token Radar
 
-[![make.fun · token-radar-01](https://make.fun/badge/token-radar-01.svg)](https://make.fun/bounty/token-radar-01)
-[![rank](https://make.fun/badge/token-radar-01/LightHaru/token-radar-01/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard)
-[![reward](https://make.fun/badge/token-radar-01/LightHaru/token-radar-01/reward.svg)](https://make.fun/bounty/token-radar-01)
-
 Offline Node entry for the make.fun token-radar-01 bounty.
 
 ## Run
@@ -39,6 +35,10 @@ The result is an explicit implied-value model, not evidence of a future issuance
 
 Each detail shows low/base/high sensitivity bands. They are fixed 25% displayed sensitivity ranges around the base estimate, driven by TVL, comparable market-cap/TVL ratios, 7-day growth, and tracking-age maturity. They are not confidence intervals or probabilities.
 
+Coverage is computed from `snapshot.watchlist` and the ranked slug set. The snapshot banner must show the resulting covered/total value (the sealed snapshot has 40 official watchlist entries). Pre-token rows mean DefiLlama snapshot fields record no market cap, CoinGecko id, or symbol; it is not proof of tokenlessness.
+
+The formula is shared by Node and the browser through `dashboard/valuation.js`. It clamps 7-day growth to -60 to +120 percentage points, uses neutral missing growth of 0, unknown age of 365 days, and maturity from 0.75x to 1.05x over 1,095 days. The bounded comparable median contributes 45%; category or all-live fallback sample size is shown in each row.
+
 ## Data provenance
 
 All protocol values come from the supplied immutable snapshot. The snapshot is not copied or vendored into this entry. Its source field identifies the sealed DefiLlama endpoint/fetch. The entry performs no fetches and uses no external assets or services.
@@ -59,3 +59,5 @@ NODE_PATH=/path/to/node_modules PLAYWRIGHT_BROWSERS_PATH=/path/to/browsers node 
 ```
 
 The capture script uses `pathToFileURL`, verifies search focus/caret, clicks a protocol detail, selects Base / Risk Curators / Watchlist, asserts exactly 7 concrete protocol rows, and asserts no page errors or outbound requests.
+
+It also tests Enter/Space detail access, the Live tokens tab, disjoint live/pre-token slug sets, a 390px mobile width, and recomputation of every board value with the shared valuation module.

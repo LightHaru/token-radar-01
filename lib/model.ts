@@ -1,5 +1,11 @@
 // Original snapshot-only model for Token Radar.
 // The value is an analytical estimate, not a forecast or a claim that a token will launch.
+import { createRequire } from 'node:module';
+const valuation = createRequire(import.meta.url)('../dashboard/valuation.js') as {
+  median: (values: number[]) => number | null;
+  ageDays: (asOf: string, listedAt: string | null) => number | null;
+  calculate: (input: any) => any;
+};
 
 export interface SnapshotProtocol {
   slug: string;
@@ -123,6 +129,7 @@ export interface LiveRow {
   tvl_usd: number;
   mcap_usd: number | null;
   change_7d: number | null;
+  symbol: string | null;
 }
 
 export interface RadarData {
@@ -136,6 +143,13 @@ export interface RadarData {
   early_size: number;
   live_size: number;
   comparable_method: string;
+  formula: string;
+  coverage: {
+    covered: number;
+    total: number;
+    full: boolean;
+    watchlist: string[];
+  };
   rows: RadarRow[];
   live: LiveRow[];
 }
@@ -147,11 +161,7 @@ export class SnapshotError extends Error {
 const DAY_MS = 86_400_000;
 
 export function ageDays(asOf: string, listedAt: string | null): number | null {
-  if (!listedAt) return null;
-  const a = Date.parse(`${asOf}T00:00:00Z`);
-  const b = Date.parse(`${listedAt}T00:00:00Z`);
-  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
-  return Math.max(0, Math.floor((a - b) / DAY_MS));
+  return valuation.ageDays(asOf, listedAt);
 }
 
 function isFiniteNumber(v: unknown): v is number {
@@ -188,7 +198,7 @@ function comparableProtocols(snapshot: Snapshot, category: string | null) {
   const categoryLive = category ? live.filter((p) => p.category === category) : [];
   const pool = categoryLive.length >= 3 ? categoryLive : live;
   const ratios = pool.map((p) => p.mcap_usd! / p.tvl_usd);
-  return { count: pool.length, ratio: median(ratioRatios(ratios)) };
+  return { count: pool.length, ratio: valuation.median(ratios) };
 }
 
 function ratioRatios(ratios: number[]): number[] {
@@ -197,19 +207,16 @@ function ratioRatios(ratios: number[]): number[] {
 }
 
 export function impliedValue(snapshot: Snapshot, protocol: SnapshotProtocol, model: ModelConstants = MODEL) {
-  const age = ageDays(snapshot.as_of, protocol.listed_at);
-  const growthPct = Math.max(model.growth_floor, Math.min(model.growth_cap, protocol.change_7d ?? 0));
-  const growthMult = 1 + (growthPct / 100) * model.growth_weight;
-  const ageForModel = age ?? model.unknown_age_days;
-  const maturityMult = model.maturity_floor + (Math.min(Math.max(ageForModel, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
-  const tvlAnchor = protocol.tvl_usd * model.tvl_multiple;
   const comparable = comparableProtocols(snapshot, protocol.category);
-  const comparableAnchor = comparable.ratio === null ? null : protocol.tvl_usd * comparable.ratio;
-  const blended = comparableAnchor === null
-    ? tvlAnchor
-    : tvlAnchor * (1 - model.comparable_blend) + comparableAnchor * model.comparable_blend;
-  const implied = Math.max(1, Math.round(blended * growthMult * maturityMult));
-  return { implied, age, growthPct, growthMult, maturityMult, tvlAnchor, comparableAnchor, comparableCount: comparable.count, comparableRatio: comparable.ratio };
+  const calc = valuation.calculate({
+    model,
+    change7d: protocol.change_7d,
+    asOf: snapshot.as_of,
+    listedAt: protocol.listed_at,
+    tvlUsd: protocol.tvl_usd,
+    comparableRatio: comparable.ratio,
+  });
+  return { implied: calc.implied, age: calc.age, growthPct: calc.growth, growthMult: calc.growthMultiplier, maturityMult: calc.maturityMultiplier, tvlAnchor: calc.tvlAnchor, comparableAnchor: calc.comparableAnchor, comparableCount: comparable.count, comparableRatio: comparable.ratio };
 }
 
 function chainOf(p: SnapshotProtocol): string {
@@ -248,12 +255,12 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): string[] {
   const chain = chainOf(p);
   const action = actionFor(p, 0, chain).replace('$0 ', '').replace('$0', '');
   const steps = [
-    `Before acting, verify the protocol's official app and contract for ${p.name} on ${chain}; stop if the contract, chain, or support status is unclear.`,
-    `Confirm that ${p.name} exposes a user-supported product matching its recorded category (${p.category ?? 'unreported'}), such as a verified vault, pool, bridge, or market.`,
-    `${action} If no supported product is available, mark this workflow unavailable and take no transaction.`,
-    `If proceeding, use a dedicated wallet and a user-capped test amount; verify approval scope, withdrawal path, fees, lockups, oracle or bridge dependencies, and smart-contract risk.`,
-    `Record the official transaction and in-app status, but do not infer a qualification rule or reward: snapshot metadata establishes no points, cadence, budget, or minimum holding period.`,
-    `Unwind only through the verified interface and confirm slippage, fees, depeg, bridge, liquidity, liquidation, and smart-contract risks. No reward or token issuance is promised.`,
+    `Verify ${p.name}'s official app and contract on ${chain}; stop if the contract, chain, or support status is unclear. Cost: $0 read-only. Time: 5-10 minutes.`,
+    `Confirm a user-supported product matching its recorded category (${p.category ?? 'unreported'}). Cost: $0 read-only. Time: 5-15 minutes.`,
+    `${action} If unavailable, skip and make no transaction. Cost: $0 until an optional wallet quote. Time: 10-20 minutes.`,
+    `For a voluntary test, use a user-capped budget and verify approval scope, withdrawal, fees, lockups, and smart-contract risks. Cost: wallet gas quote subject to your cap. Time: 10-30 minutes.`,
+    `Record the official transaction and status; snapshot metadata establishes no points, cadence, budget, or holding qualification. Cost: $0 read-only. Time: 5 minutes.`,
+    `Exit only through the verified interface and check slippage, fees, depeg, bridge, liquidity, and liquidation. Cost: network gas quoted by your wallet. Time: 10-30 minutes.`,
   ];
   return steps;
 }
@@ -319,7 +326,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       implied_value_usd: v.implied,
       confidence,
       comparable_count: v.comparableCount,
-      comparable_ratio: v.comparableRatio === null ? null : round4(v.comparableRatio),
+      comparable_ratio: v.comparableRatio,
       evidence,
       assumptions,
       caveat,
@@ -350,12 +357,13 @@ export function liveRows(snapshot: Snapshot): LiveRow[] {
     .filter((p) => !isPreToken(p) && p.category !== 'CEX')
     .sort((a, b) => (b.mcap_usd ?? 0) - (a.mcap_usd ?? 0) || b.tvl_usd - a.tvl_usd)
     .slice(0, LIVE_ROWS)
-    .map((p) => ({ slug: p.slug, name: p.name, category: p.category, chains: p.chains, tvl_usd: p.tvl_usd, mcap_usd: p.mcap_usd, change_7d: p.change_7d }));
+    .map((p) => ({ slug: p.slug, name: p.name, category: p.category, chains: p.chains, tvl_usd: p.tvl_usd, mcap_usd: p.mcap_usd, change_7d: p.change_7d, symbol: p.symbol }));
 }
 
 export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: RadarData } {
   const board = buildBoard(snapshot, MODEL);
   const watch = new Set(snapshot.watchlist);
+  const covered = snapshot.watchlist.filter((slug) => board.some((row) => row.slug === slug)).length;
   const radar: RadarData = {
     as_of: snapshot.as_of,
     source: snapshot.source,
@@ -367,6 +375,8 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     early_size: board.filter((r) => !watch.has(r.slug)).length,
     live_size: liveRows(snapshot).length,
     comparable_method: 'Median live-token market-cap/TVL ratio: category median when at least 3 records exist, otherwise all live-token records. The live set is comparable evidence, not a hardcoded name list.',
+    formula: 'rounded whole-dollar value = round(((TVL × 0.25 × 55%) + (TVL × bounded median live mcap/TVL × 45%)) × growth factor × maturity factor)',
+    coverage: { covered, total: snapshot.watchlist.length, full: covered === snapshot.watchlist.length, watchlist: snapshot.watchlist },
     rows: board,
     live: liveRows(snapshot),
   };

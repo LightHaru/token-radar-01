@@ -54,4 +54,12 @@ tbody tr{cursor:pointer}tbody tr:hover{background:#f7faf8}tbody tr:last-child td
 .equation span{color:var(--muted)}.steps{margin:0;padding-left:18px;display:grid;gap:9px}.steps li{padding-left:3px}
 .caveat{border-left:3px solid var(--amber);padding:8px 10px;background:#faf7ef;color:#72531f;font-size:12px}
 .live-list{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.live-card{border:1px solid var(--line);border-radius:8px;padding:12px}.live-card b{display:block}
+.coverage{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:0 0 12px;padding:12px 14px;border:1px solid #b8d1c2;border-radius:var(--r);background:var(--green-soft)}
+.coverage b{display:block;font-size:18px;color:var(--green)}.coverage-meta{max-width:55%;color:var(--muted);font-size:12px;text-align:right;overflow-wrap:anywhere}
+.formula-short{margin:10px 0;padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--muted);font-size:12px}.formula-short strong{color:var(--ink)}
+.live-caption{text-align:left;padding:10px 12px;color:var(--muted);font-size:12px}
+.live-table{table-layout:fixed;width:100%;white-space:normal}.live-table th,.live-table td{overflow-wrap:anywhere}.live-table th:nth-child(1){width:12%}.live-table th:nth-child(2){width:24%}.live-table th:nth-child(3){width:18%}.live-table th:nth-child(4){width:16%}.live-table th:nth-child(5){width:18%}.live-table th:nth-child(6){width:12%}
+.live-protocol{white-space:normal}.live-name,.live-chains{display:block}.live-name{font-size:14px}.live-chains{margin-top:2px;color:var(--muted);font-size:11px;line-height:1.3}
+.formula{display:block;margin:8px 0;padding:9px;border:1px solid var(--line);border-radius:7px;background:#f7faf8;font-size:12px;overflow-wrap:anywhere}
+.step-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.step-card{border:1px solid var(--line);border-radius:8px;padding:9px;font-size:12px}.step-card p{min-height:42px}.step-cost,.step-time{margin-top:5px;color:var(--muted);font-family:var(--mono);font-size:11px}
 @media(max-width:900px){.shell{padding:14px}.lede{grid-template-columns:1fr}.metrics{max-width:none}.controls{flex-wrap:wrap}.control input{width:220px}.live-list{grid-template-columns:1fr 1fr}}

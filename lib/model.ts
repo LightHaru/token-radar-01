@@ -7,8 +7,6 @@ const valuation = createRequire(import.meta.url)('../dashboard/valuation.js') as
   ageDays: (asOf: string, listedAt: string | null) => number | null;
   calculate: (input: any) => any;
   proof: (snapshot: Snapshot) => any;
-  planStatus: (category: string | null) => 'Research' | 'Conditional' | 'Skip';
-  planActions: (protocol: {name:string;category:string|null;chains:string[]}) => any;
 };
 
 export interface SnapshotProtocol {
@@ -226,51 +224,9 @@ export function impliedValue(snapshot: Snapshot, protocol: SnapshotProtocol, mod
   return { implied: calc.implied, age: calc.age, growthPct: calc.growth, growthMult: calc.growthMultiplier, maturityMult: calc.maturityMultiplier, tvlAnchor: calc.tvlAnchor, comparableAnchor: calc.comparableAnchor, comparableCount: comparable.count, comparableRatio: comparable.ratio };
 }
 
-function chainOf(p: SnapshotProtocol): string {
-  return p.chains.length ? p.chains[0]! : 'its main chain';
-}
-
-function capitalFor(p: SnapshotProtocol): number {
-  if (p.tvl_usd >= 5_000_000_000) return 250;
-  if (p.tvl_usd >= 1_000_000_000) return 150;
-  if (p.tvl_usd >= 100_000_000) return 100;
-  return 50;
-}
-
-function holdDaysFor(age: number | null): number {
-  if (age === null) return 30;
-  if (age < 180) return 60;
-  if (age < 365) return 45;
-  return 30;
-}
-
-function actionFor(p: SnapshotProtocol, capital: number, chain: string): string {
-  const c = (p.category ?? '').toLowerCase();
-  const name = p.name;
-  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return `Verify the supported supply, borrow, or collateral workflow in ${name} on ${chain}; check oracle, withdrawal, and liquidation conditions before any transaction.`;
-  if (c.includes('dex') || c.includes('yield') || c.includes('leveraged farm')) return `Verify a documented low-complexity pool or yield workflow in ${name} on ${chain}; inspect pool balance, fees, withdrawal, and impermanent-loss terms.`;
-  if (c.includes('bridge')) return `Verify ${name}'s official bridge route to ${chain}; test only a user-selected capped amount and retain both transaction links.`;
-  if (c.includes('staking') || c.includes('restak')) return `Verify ${name}'s official supported staking or restaking product on ${chain}; inspect unstaking, slashing, receipt, and redemption terms.`;
-  if (c.includes('perpetual') || c.includes('derivative')) return `Verify ${name}'s supported margin or derivative workflow on ${chain}; inspect liquidation, funding, oracle, and close paths before action.`;
-  if (c.includes('prediction')) return `Verify ${name}'s supported market workflow on ${chain}; inspect resolution, settlement, and cancellation rules before action.`;
-  if (c.includes('stable') || c.includes('rwa')) return `Verify ${name}'s supported mint, deposit, or redemption workflow on ${chain}; inspect peg, redemption, custody, and depeg terms.`;
-  if (c.includes('insurance')) return `Verify ${name}'s supported cover workflow on ${chain}; inspect covered event, claim, and payout terms before action.`;
-  return `Verify ${name}'s official supported deposit or participation workflow on ${chain}; confirm the withdrawal path before any transaction.`;
-}
-
 export function farmSteps(p: SnapshotProtocol, age: number | null): string[] {
-  const chain = chainOf(p);
-  const shared = valuation.planActions(p);
-  const action = shared.verify;
-  const steps = [
-    `${action} Cost: $0 read-only. Hands-on: 15 minutes; elapsed: 1 day.`,
-    `Confirm chain, product, approval scope, withdrawal, fees, lockups, oracle, liquidity and liquidation terms. ${shared.stop} Cost: $0 read-only. Hands-on: 15-30 minutes.`,
-    `Set a user-entered capital-at-risk cap and wallet fee/gas quote; refundable principal is not a fee. No campaign, points or expected profit is assumed. Hands-on: 10-20 minutes.`,
-    `Enter only if the verified interface and stop gate pass. Record transactions and elapsed time; do not infer qualification. Hands-on: 10-30 minutes.`,
-    `Opportunities cost: edit capital, annual assumption, elapsed days and probability in the detail. Break-even includes fees and opportunity cost. Hands-on: 5 minutes.`,
-    `${shared.exit} Cost: network gas quote. Hands-on: 10-30 minutes.`,
-  ];
-  return steps;
+  const plan = valuation.buildPlan(p, age);
+  return plan.steps;
 }
 
 export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, fitProof?: any): BoardRow[] {
@@ -310,13 +266,16 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, fi
       p.tvl_usd >= snapshot.floor_usd && v.age !== null && p.change_7d !== null ? 'High'
       : p.tvl_usd >= 25_000_000 && v.age !== null ? 'Medium' : 'Low';
     const assumptions = [
-      `Comparable protocols contribute ${(model.comparable_blend * 100).toFixed(0)}% to the estimate through a median market-cap/TVL ratio.`,
-      `The remaining blend uses a ${model.tvl_multiple}x TVL anchor, adjusted for growth and an age maturity factor.`,
-      `Missing 7-day growth is modeled as 0%; missing age is modeled as ${model.unknown_age_days} days.`,
+      `Canonical model: intercept + coefficient × ln(TVL) + growth coefficient × clamp(7d,-60,120)/100 + age coefficient × clamp(age,0,1095)/1095 + shrunken category effect.`,
+      `V3 log-size median 3.3987/rank 0.4045; V4 deployed median 3.7627/rank 0.4040. V4 adds active growth/age/category terms without claiming lower error.`,
+      `Missing growth is neutral 0; missing age uses 365/1095 for the age feature; residual quantiles are held-out only.`,
     ];
     const caveat = 'No token issuance or future market outcome is inferred. DefiLlama may not have recorded a token; this is an estimate, not an airdrop prediction.';
+    const plan = valuation.buildPlan(p, v.age);
     const workflowStatus: 'Observational candidate' | 'Workflow unavailable' =
-      valuation.planStatus(p.category) === 'Skip' ? 'Workflow unavailable' : 'Observational candidate';
+      plan.status === 'Skip' ? 'Workflow unavailable'
+      : plan.status === 'Conditional' ? 'Observational candidate'
+      : 'Workflow unavailable';
     const sensitivity = {
       low_usd: Math.max(1, Math.round(v.implied * (fitProof?.bands?.low ?? 0.75))),
       base_usd: v.implied,
@@ -410,8 +369,8 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     board_size: board.length,
     early_size: board.filter((r) => !watch.has(r.slug)).length,
     live_size: liveRows(snapshot).length,
-    comparable_method: 'Median live-token market-cap/TVL ratio: category median when at least 3 records exist, otherwise all live-token records. The live set is comparable evidence, not a hardcoded name list.',
-    formula: 'rounded whole-dollar value = round(((TVL × 0.25 × 55%) + (TVL × bounded median live mcap/TVL × 45%)) × growth factor × maturity factor)',
+    comparable_method: 'Canonical TVL/7d/age/category fit trained on traded snapshot peers; live-token records are not ranked as pre-token rows.',
+    formula: 'rounded whole-dollar value = round(exp(intercept + log-size coefficient × ln(TVL) + growth coefficient × clamp(7d,-60,120)/100 + age coefficient × clamp(tracking age,0,1095)/1095 + shrunken category effect))',
     coverage: { covered, total: snapshot.watchlist.length, full: covered === snapshot.watchlist.length, watchlist: snapshot.watchlist },
     rows: board,
     live: liveRows(snapshot),

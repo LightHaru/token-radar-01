@@ -34,7 +34,7 @@ For each protocol:
 3. Pooled held-out pairs are the source of median multiplicative error and Spearman rank correlation; a true median is used for even pair counts.
 4. The selected held-out residual quantiles supply illustrative bands. This is cross-sectional snapshot evidence, not a historical backtest or issuance probability.
 
-The canonical result is selected from held-out peer comparisons, not from prescored values. The same peer records and leave-one-out folds compare flat TVL, the V2 category/global blend with growth and age, log TVL, shrinkage category effects, and growth/age ablations. Selection uses pooled held-out multiplicative error and pooled Spearman correlation. The selected log or categorical fit is applied to every canonical row. Illustrative bands use pooled held-out residual quantiles. The result is an explicit conditional implied-value model, not evidence of a future issuance, listing, token allocation, or price.
+The canonical V4 deployment is the log-size plus bounded 7-day growth, bounded tracking-age, and shrunken-category fit. It is intentionally retained to use TVL, growth, and tracking age together. The lowest-error candidate is reported separately; V4 deploys the active-input model and reports its held-out multiplicative error/rank tradeoff. The result is an explicit conditional implied-value model, not evidence of a future issuance, listing, token allocation, or price.
 
 Each detail shows fitted terms and illustrative residual bands. The bands come from pooled leave-one-out residual quantiles; they are not confidence intervals or probabilities.
 

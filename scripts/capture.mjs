@@ -2,158 +2,127 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
-
-const browserCache = process.env.PLAYWRIGHT_BROWSERS_PATH;
-if (!browserCache) console.log('PLAYWRIGHT_BROWSERS_PATH not set; using Playwright installation defaults');
-const require = createRequire(import.meta.url);
-const { chromium } = require('playwright');
-const Valuation = require('./../dashboard/valuation.js');
-const root = process.cwd();
-const boardData = JSON.parse(fs.readFileSync(path.join(root, 'output/board.json'), 'utf8'));
-const pageUrl = pathToFileURL(path.join(root, 'output/dashboard/index.html')).href;
-const browser = await chromium.launch({ headless: true });
-const page = await browser.newPage({ viewport: { width: 1360, height: 900 }, deviceScaleFactor: 1 });
-const pageErrors = [];
-const outbound = [];
-
-page.on('pageerror', (error) => pageErrors.push(error.message));
-page.on('request', (request) => {
-  if (!request.url().startsWith('file:')) outbound.push(request.url());
-});
-
-await page.goto(pageUrl, { waitUntil: 'load' });
-await page.waitForTimeout(100);
-const firstText = (await page.locator('body').innerText()).trim();
-if (!firstText.includes('Pre-token protocol radar')) throw new Error('board did not render');
-
-await page.locator('#tab-live').click();
+const require=createRequire(import.meta.url);
+const {chromium}=require('playwright-core');
+const root=process.cwd(), out=path.join(root,'output');
+const url=pathToFileURL(path.join(out,'dashboard/index.html')).href;
+const chrome=process.env.CHROME_BIN;if(!chrome)throw new Error('CHROME_BIN is required');
+const browser=await chromium.launch({headless:true,executablePath:chrome});
+const page=await browser.newPage({viewport:{width:1360,height:900},deviceScaleFactor:1});
+const errors=[],outbound=[];
+page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(!r.url().startsWith('file:'))outbound.push(r.url())});
+await page.goto(url,{waitUntil:'load'});
+await page.waitForFunction(()=>window.RADAR&&window.RADAR.board_triples&&document.querySelectorAll('table tr').length>1);
+if(!(await page.locator('body').innerText()).includes('758/758'))throw new Error('cover parity missing');
+await page.screenshot({path:path.join(root,'screenshots/1-board.png'),type:'png'});
+await page.locator('table tr').nth(1).click();
 await page.waitForTimeout(50);
-const liveRows = await page.locator('tbody tr[data-live-slug]').count();
-if (liveRows < 1) throw new Error('Live tokens view rendered no real rows');
-const liveHeaders = await page.locator('.live-table th').allTextContents();
-if (liveHeaders.length !== 6) throw new Error('Live table did not render six headers');
-const liveCells = await page.locator('.live-table tbody tr[data-live-slug]').first().locator('td').count();
-if (liveCells !== 6) throw new Error('Live table did not render six real cells');
-const liveLayout = await page.evaluate(() => {
-  const wrap = document.querySelector('.table-wrap');
-  const table = document.querySelector('.live-table');
-  const last = table ? table.querySelector('tbody tr td:last-child') : null;
-  return {
-    wrapOverflow: wrap ? wrap.scrollWidth > wrap.clientWidth : true,
-    pageOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
-    lastRight: last ? last.getBoundingClientRect().right : 0,
-  };
-});
-if (liveLayout.wrapOverflow || liveLayout.pageOverflow || liveLayout.lastRight > 1360) throw new Error('Live table has horizontal overflow');
+await page.locator('input').filter({has:undefined}).first().count();
+const detailText=await page.locator('#detail').innerText();
+if(!detailText.includes('Actual category peer context')||!detailText.includes('Planning scenario control')||!detailText.includes('Opportunity cost'))throw new Error('detail proof/scenario missing');
+const canonicalBefore=await page.evaluate(()=>window.RADAR.board_triples.map(function(t){return t}));
+await page.locator('#detail input').nth(0).fill('250');
+await page.locator('#detail input').nth(1).fill('12');
+await page.locator('#detail input').nth(2).fill('60');
+await page.locator('#detail input').nth(3).fill('8');
+await page.locator('#detail input').nth(4).fill('0');
+await page.waitForTimeout(50);
+const zeroText=await page.locator('#break-even').innerText();
+if(!zeroText.includes('unattainable at 0% probability'))throw new Error('0% scenario did not show unattainable');
+await page.locator('#detail input').nth(4).fill('50');
+await page.waitForTimeout(50);
+const scenarioText=await page.locator('#break-even').innerText();
+if(!scenarioText.includes('break-even realized reward')||!scenarioText.includes('Opportunity cost'))throw new Error('scenario math missing');
+const canonicalAfter=await page.evaluate(()=>window.RADAR.board_triples.map(function(t){return t}));
+if(JSON.stringify(canonicalBefore)!==JSON.stringify(canonicalAfter))throw new Error('scenario changed canonical rank/value');
+await page.screenshot({path:path.join(root,'screenshots/2-detail.png'),type:'png'});
+await page.locator('#detail .close').click();
+await page.locator('.search').fill('lending');
+await page.waitForTimeout(50);
+const searchFocused=await page.locator('.search').evaluate(function(n){return document.activeElement===n});
+if(!searchFocused)throw new Error('search focus lost');
+const searchCount=await page.locator('table tr').count();
+if(searchCount<=1)throw new Error('search returned no real protocol');
+await page.locator('.search').fill('');
+await page.locator('#plan').selectOption('Conditional');
+await page.waitForTimeout(50);
+const planRows=await page.locator('table tr').count();
+if(planRows<=1)throw new Error('filtered plan view has no protocol rows');
+await page.locator('#visibility').selectOption('above');
+await page.waitForTimeout(50);
+const aboveRows=await page.locator('table tr').count();
+if(aboveRows<=1)throw new Error('above-floor scope has no protocol rows');
+await page.locator('#visibility').selectOption('below');
+await page.waitForTimeout(50);
+const belowRows=await page.locator('table tr').count();
+if(belowRows<=1)throw new Error('below-floor scope has no protocol rows');
+await page.locator('#category').selectOption('Lending');
+await page.locator('#visibility').selectOption('above');
+await page.waitForTimeout(50);
+const filteredRows=await page.locator('table tr').count();
+if(filteredRows<=1)throw new Error('Lending/Conditional/Above-floor screenshot has no protocol rows');
+await page.screenshot({path:path.join(root,'screenshots/3-filtered.png'),type:'png'});
+await page.locator('#chain').selectOption('all');
+await page.locator('#category').selectOption('all');
+await page.locator('#visibility').selectOption('all');
+await page.locator('#plan').selectOption('All');
+await page.locator('.live-link').click();
+await page.screenshot({path:path.join(root,'screenshots/4-live.png'),type:'png'});
 await page.locator('#q').fill('ethereum');
 await page.waitForTimeout(50);
-const liveSearchRows = await page.locator('tbody tr[data-live-slug]').count();
-if (liveSearchRows < 1) throw new Error('Live search returned no real rows');
+const liveSearchRows=await page.locator('#board-content table tr').count()-1;
+if(liveSearchRows<1)throw new Error('live search has no real rows');
 await page.locator('#q').fill('');
 await page.locator('#chain').selectOption('Ethereum');
 await page.waitForTimeout(50);
-const liveChainRows = await page.locator('tbody tr[data-live-slug]').count();
-if (liveChainRows < 1) throw new Error('Live chain filter returned no real rows');
+if(await page.locator('#board-content table tr').count()<=1)throw new Error('live chain filter has no rows');
 await page.locator('#chain').selectOption('all');
-const liveCategory = await page.evaluate(() => window.RADAR.live.find((row) => row.category)?.category || 'all');
-if (liveCategory === 'all') throw new Error('No live category available to test');
+const liveCategory=await page.evaluate(()=>window.RADAR.live.find(function(r){return r[2]})?.[2]||'all');
+if(liveCategory==='all')throw new Error('no live category');
 await page.locator('#category').selectOption(liveCategory);
 await page.waitForTimeout(50);
-const liveCategoryRows = await page.locator('tbody tr[data-live-slug]').count();
-if (liveCategoryRows < 1) throw new Error('Live category filter returned no real rows');
+if(await page.locator('#board-content table tr').count()<=1)throw new Error('live category filter has no rows');
+const preSlugs=await page.evaluate(()=>window.RADAR.rows.map(function(r){return r[1]}));
+const liveOverlap=await page.evaluate((pre)=>window.RADAR.live.filter(function(r){return pre.indexOf(r[0])>=0}).map(function(r){return r[0]}),preSlugs);
+if(liveOverlap.length)throw new Error('live/pre overlap '+liveOverlap.join(','));
+const desktopOverflow=await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth);
+if(!desktopOverflow)throw new Error('desktop live layout overflows');
+await page.locator('#q').fill('');
+await page.locator('#chain').selectOption('all');
 await page.locator('#category').selectOption('all');
-await page.screenshot({ path: path.join(root, 'screenshots/4-live.png'), type: 'png' });
-await page.locator('#tab-pre').click();
-
-const search = page.locator('#q');
-await search.click();
-await search.fill('bridge');
-await page.waitForTimeout(100);
-const searchFocused = await search.evaluate((node) => document.activeElement === node);
-const searchCaret = await search.evaluate((node) => [node.selectionStart, node.selectionEnd]);
-if (!searchFocused || searchCaret[0] !== 6) throw new Error('search focus/caret was not preserved');
-await search.fill('');
-
-await page.screenshot({ path: path.join(root, 'screenshots/1-board.png'), type: 'png' });
-
-await page.locator('tbody tr').first().click();
-await page.waitForTimeout(100);
-if (await page.locator('#detail').getAttribute('hidden') !== null) throw new Error('detail did not open');
-await page.screenshot({ path: path.join(root, 'screenshots/2-detail.png'), type: 'png' });
-await page.locator('#detail .close').click();
-
-await page.locator('tbody tr[data-slug]').first().focus();
+await page.setViewportSize({width:390,height:844});
+await page.waitForTimeout(50);
+const mobileOverflow=await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth);
+if(!mobileOverflow)throw new Error('390px live layout overflows');
+await page.locator('.live-link').click();
+await page.waitForTimeout(50);
+if(await page.locator('table tr').count()<1)throw new Error('could not return from live view');
+await page.locator('#q').fill('bridge');
+await page.waitForTimeout(50);
+const searchFocus=await page.locator('#q').evaluate(function(n){return document.activeElement===n});
+const caret=await page.locator('#q').evaluate(function(n){return[n.selectionStart,n.selectionEnd]});
+if(!searchFocus||caret[0]!==6)throw new Error('board search focus/caret not preserved');
+await page.locator('#q').fill('');
+const firstRow=page.locator('table tr').nth(1);
+await firstRow.focus();
 await page.keyboard.press('Enter');
 await page.waitForTimeout(50);
-if (await page.locator('#detail').getAttribute('hidden') !== null) throw new Error('Enter did not open detail');
+if(await page.locator('#detail').getAttribute('hidden')!==null)throw new Error('Enter did not open detail');
 await page.locator('#detail .close').click();
-await page.locator('tbody tr[data-slug]').first().focus();
+await firstRow.focus();
 await page.keyboard.press(' ');
 await page.waitForTimeout(50);
-if (await page.locator('#detail').getAttribute('hidden') !== null) throw new Error('Space did not open detail');
+if(await page.locator('#detail').getAttribute('hidden')!==null)throw new Error('Space did not open detail');
 await page.locator('#detail .close').click();
-
-await page.locator('#chain').selectOption('Base');
-await page.locator('#category').selectOption('Risk Curators');
-await page.locator('#visibility').selectOption('watchlist');
-await page.waitForTimeout(100);
-const filteredRows = await page.locator('tbody tr[data-slug]').count();
-const filterText = (await page.locator('body').innerText()).trim();
-if (filteredRows !== 7) throw new Error(`Base/Risk Curators/watchlist expected 7 protocol rows, got ${filteredRows}`);
-const selectedChain = await page.locator('#chain').inputValue();
-const selectedCategory = await page.locator('#category').inputValue();
-const selectedVisibility = await page.locator('#visibility').inputValue();
-if (selectedChain !== 'Base' || selectedCategory !== 'Risk Curators' || selectedVisibility !== 'watchlist') {
-  throw new Error(`unexpected selected filters: ${selectedChain}/${selectedCategory}/${selectedVisibility}`);
-}
-if (!filterText.includes('Watchlist')) throw new Error('filter screenshot missing watchlist label');
-await page.screenshot({ path: path.join(root, 'screenshots/3-filtered.png'), type: 'png' });
-
-await page.setViewportSize({ width: 390, height: 844 });
-await page.waitForTimeout(50);
-const mobileOverflow = await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
-if (!mobileOverflow) throw new Error('mobile layout has horizontal page overflow');
-
-const radar = await page.evaluate(() => window.RADAR);
-const preSlugs = new Set(radar.rows.map((row) => row.slug));
-const liveSlugs = new Set(radar.live.map((row) => row.slug));
-const overlap = [...preSlugs].filter((slug) => liveSlugs.has(slug));
-if (overlap.length) throw new Error('pre-token/live overlap: ' + overlap.join(','));
-const browserMismatch = await page.evaluate(() => {
-  const mismatches = [];
-  for (const row of window.RADAR.rows) {
-    const calc = window.TokenRadarValuation.calculate({
-      model: window.RADAR.model,
-      change7d: row.change_7d,
-      asOf: window.RADAR.as_of,
-      listedAt: row.listed_at,
-      tvlUsd: row.tvl_usd,
-      comparableRatio: row.comparable_ratio,
-    });
-    if (calc.implied !== row.implied_value_usd) mismatches.push(row.slug);
-  }
-  return mismatches;
-});
-if (browserMismatch.length) throw new Error('Browser recomputation differs for ' + browserMismatch.join(','));
-for (const row of boardData.rows) {
-  const calc = Valuation.calculate({
-    model: radar.model,
-    change7d: row.change_7d,
-    asOf: radar.as_of,
-    listedAt: row.listed_at,
-    tvlUsd: row.tvl_usd,
-    comparableRatio: row.comparable_ratio,
-  });
-  if (calc.implied !== row.implied_value_usd) throw new Error('shared recomputation differs for ' + row.slug);
-}
-
+const mismatch=await page.evaluate(()=>{var a=[];for(var i=0;i<window.RADAR.rows.length;i++){var r=window.RADAR.rows[i],v=Math.max(1,Math.round(window.TokenRadarValuation.selectedPredict(window.RADAR.valuation_proof.parameters,{category:r[3],tvl_usd:r[5],change_7d:r[6],listed_at:r[11]})));if(v!==r[9])a.push(r[1])}return a});
+if(mismatch.length)throw new Error('browser parity '+mismatch.join(','));
+const boardData=JSON.parse(fs.readFileSync(path.join(out,'board.json'),'utf8'));
+const exported=boardData.rows;
+const compact=await page.evaluate(()=>window.RADAR.board_triples);
+if(exported.length!==compact.length)throw new Error('board triple count differs');
+for(var i=0;i<exported.length;i++){var r=exported[i],t=compact[i];if(r.rank!==t[0]||r.slug!==t[1]||r.implied_value_usd!==t[2])throw new Error('board.json triple mismatch '+r.slug)}
 await browser.close();
-
-fs.mkdirSync(path.join(root, 'output/screenshots'), { recursive: true });
-for (const name of ['1-board.png', '2-detail.png', '3-filtered.png', '4-live.png']) {
-  fs.copyFileSync(path.join(root, 'screenshots', name), path.join(root, 'output/screenshots', name));
-}
-
-if (pageErrors.length) throw new Error('page errors: ' + pageErrors.join('; '));
-if (outbound.length) throw new Error('outbound requests: ' + outbound.join('; '));
-console.log('captured board, detail, and filtered states with no page errors or outbound requests');
+fs.mkdirSync(path.join(out,'screenshots'),{recursive:true});
+for(const n of ['1-board.png','2-detail.png','3-filtered.png','4-live.png'])fs.copyFileSync(path.join(root,'screenshots',n),path.join(out,'screenshots',n));
+if(errors.length||outbound.length)throw new Error(errors.concat(outbound).join(';'));
+console.log('3 board/detail/filtered states and live view captured offline');

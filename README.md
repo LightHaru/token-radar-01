@@ -25,23 +25,22 @@ node main.ts --input /path/to/snapshot.json --output /path/to/out
 
 ## Method
 
-`lib/model.ts` ranks all official watchlist slugs. It may add up to 160 pre-token protocols below the floor that pass metadata credibility checks, excluding clear wrappers, staking products, receipt tokens, CEX records, bridges, liquid staking, versioned subproducts, and names containing wrapping or staking markers.
+`lib/model.ts` accounts for all 758 snapshot records exactly once: 40 official watchlist, eligible above-floor off-list, eligible early below-floor, recorded/traded, and set-aside records. It ranks all official watchlist slugs plus every eligible rankable protocol, excluding clear wrappers, staking products, receipt tokens, CEX records, bridges, liquid staking, versioned subproducts, and names containing wrapping or staking markers. “No token recorded” means the snapshot fields are absent, not verified token nonexistence.
 
 For each protocol:
 
-1. TVL is valued with a 0.25x anchor.
-2. Live-token protocols provide a market-cap/TVL comparable ratio. A category median is used when at least three category comparables exist; otherwise the all-live median is used.
-3. The TVL and comparable anchors are blended 55%/45%.
-4. A 7-day TVL factor adjusts by `1 + clamp(7-day TVL change in percentage points, -60, 120) * 0.35`. For example, +10 means a 10 percentage-point change, not 10 percent of 10.
-5. A maturity factor ranges from 0.75 to 1.05 across 1,095 tracking days. Unknown age uses 365 days.
+1. Flat TVL and V2 comparable-blend baselines remain in the held-out comparison.
+2. One shared fitter compares log-TVL, category-shrinkage, growth, and tracking-age candidate ablations on the same traded peers and leave-one-out folds.
+3. Pooled held-out pairs are the source of median multiplicative error and Spearman rank correlation; a true median is used for even pair counts.
+4. The selected held-out residual quantiles supply illustrative bands. This is cross-sectional snapshot evidence, not a historical backtest or issuance probability.
 
-The result is an explicit implied-value model, not evidence of a future issuance, listing, token allocation, or price. Missing and extreme snapshot fields are handled conservatively. Confidence is derived only from TVL, age, and reported growth.
+The canonical result is selected from held-out peer comparisons, not from prescored values. The same peer records and leave-one-out folds compare flat TVL, the V2 category/global blend with growth and age, log TVL, shrinkage category effects, and growth/age ablations. Selection uses pooled held-out multiplicative error and pooled Spearman correlation. The selected log or categorical fit is applied to every canonical row. Illustrative bands use pooled held-out residual quantiles. The result is an explicit conditional implied-value model, not evidence of a future issuance, listing, token allocation, or price.
 
-Each detail shows low/base/high sensitivity bands. They are fixed 25% displayed sensitivity ranges around the base estimate, driven by TVL, comparable market-cap/TVL ratios, 7-day growth, and tracking-age maturity. They are not confidence intervals or probabilities.
+Each detail shows fitted terms and illustrative residual bands. The bands come from pooled leave-one-out residual quantiles; they are not confidence intervals or probabilities.
 
 Coverage is computed from `snapshot.watchlist` and the ranked slug set. The snapshot banner must show the resulting covered/total value (the sealed snapshot has 40 official watchlist entries). Pre-token rows mean DefiLlama snapshot fields record no market cap, CoinGecko id, or symbol; it is not proof of tokenlessness.
 
-The formula is shared by Node and the browser through `dashboard/valuation.js`. It clamps 7-day growth to -60 to +120 percentage points, uses neutral missing growth of 0, unknown age of 365 days, and maturity from 0.75x to 1.05x over 1,095 days. The bounded comparable median contributes 45%; category or all-live fallback sample size is shown in each row.
+The selected formula and coefficients are shared by Node and the browser through `dashboard/valuation.js`. Candidate 7-day growth and tracking-age terms use bounded snapshot inputs, but the held-out comparison discloses whether those terms earn their keep.
 
 ## Data provenance
 
@@ -51,17 +50,16 @@ Live-token comparables are computed from the snapshot itself. No live protocol i
 
 ## Farm plans
 
-Actions are derived only from category, chain, TVL, and age. They contain no unsupported budget, fee, gas, leverage, weekly qualification, or holding claim. Each plan is an observational checklist: verify a supported product, use only a capped user-selected test amount, and skip when no verified product or workflow is present. The UI and board never promise issuance or rewards.
+Actions are derived only from category and chain evidence visible in the snapshot, plus verifiable protocol names. They contain no unsupported campaign, points, cadence, qualification, allocation or return. The detail accepts capital at risk, fees/gas, elapsed days, an annual opportunity-cost assumption and event probability. Realized reward break-even is fees plus opportunity cost; principal is refundable capital, not a fee. The UI never promises issuance or profit.
 
 ## Reproduce screenshots
 
-Build the dashboard, then set the environment paths for the provided Playwright installation and browser cache:
+Build the dashboard, run repository tests, then capture with local environment paths:
 
 ```sh
 node main.ts --input /path/to/snapshot.json --output output
-NODE_PATH=/path/to/node_modules PLAYWRIGHT_BROWSERS_PATH=/path/to/browsers node scripts/capture.mjs
+KIT_DIR=/path/to/kit node scripts/test-model.mjs /path/to/snapshot.json
+NODE_PATH=/path/to/node_modules CHROME_BIN=/path/to/chrome node scripts/capture.mjs
 ```
 
-The capture script uses `pathToFileURL`, verifies search focus/caret, clicks a protocol detail, selects Base / Risk Curators / Watchlist, asserts exactly 7 concrete protocol rows, and asserts no page errors or outbound requests.
-
-It also tests Enter/Space detail access, the Live tokens tab, disjoint live/pre-token slug sets, a 390px mobile width, and recomputation of every board value with the shared valuation module.
+The capture script verifies offline hydration, search, upper/lower scope selection, plan filtering, scenario rank neutrality, live-view return, exported board triples, peer context, and no page errors or outbound requests.

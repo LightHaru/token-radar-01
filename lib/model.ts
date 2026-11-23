@@ -1,10 +1,14 @@
 // Original snapshot-only model for Token Radar.
 // The value is an analytical estimate, not a forecast or a claim that a token will launch.
 import { createRequire } from 'node:module';
+import { gzipSync } from 'node:zlib';
 const valuation = createRequire(import.meta.url)('../dashboard/valuation.js') as {
   median: (values: number[]) => number | null;
   ageDays: (asOf: string, listedAt: string | null) => number | null;
   calculate: (input: any) => any;
+  proof: (snapshot: Snapshot) => any;
+  planStatus: (category: string | null) => 'Research' | 'Conditional' | 'Skip';
+  planActions: (protocol: {name:string;category:string|null;chains:string[]}) => any;
 };
 
 export interface SnapshotProtocol {
@@ -152,6 +156,9 @@ export interface RadarData {
   };
   rows: RadarRow[];
   live: LiveRow[];
+  full_coverage: any;
+  valuation_proof: any;
+  canonical_plan_status: string;
 }
 
 export class SnapshotError extends Error {
@@ -253,19 +260,20 @@ function actionFor(p: SnapshotProtocol, capital: number, chain: string): string 
 
 export function farmSteps(p: SnapshotProtocol, age: number | null): string[] {
   const chain = chainOf(p);
-  const action = actionFor(p, 0, chain).replace('$0 ', '').replace('$0', '');
+  const shared = valuation.planActions(p);
+  const action = shared.verify;
   const steps = [
-    `Verify ${p.name}'s official app and contract on ${chain}; stop if the contract, chain, or support status is unclear. Cost: $0 read-only. Time: 5-10 minutes.`,
-    `Confirm a user-supported product matching its recorded category (${p.category ?? 'unreported'}). Cost: $0 read-only. Time: 5-15 minutes.`,
-    `${action} If unavailable, skip and make no transaction. Cost: $0 until an optional wallet quote. Time: 10-20 minutes.`,
-    `For a voluntary test, use a user-capped budget and verify approval scope, withdrawal, fees, lockups, and smart-contract risks. Cost: wallet gas quote subject to your cap. Time: 10-30 minutes.`,
-    `Record the official transaction and status; snapshot metadata establishes no points, cadence, budget, or holding qualification. Cost: $0 read-only. Time: 5 minutes.`,
-    `Exit only through the verified interface and check slippage, fees, depeg, bridge, liquidity, and liquidation. Cost: network gas quoted by your wallet. Time: 10-30 minutes.`,
+    `${action} Cost: $0 read-only. Hands-on: 15 minutes; elapsed: 1 day.`,
+    `Confirm chain, product, approval scope, withdrawal, fees, lockups, oracle, liquidity and liquidation terms. ${shared.stop} Cost: $0 read-only. Hands-on: 15-30 minutes.`,
+    `Set a user-entered capital-at-risk cap and wallet fee/gas quote; refundable principal is not a fee. No campaign, points or expected profit is assumed. Hands-on: 10-20 minutes.`,
+    `Enter only if the verified interface and stop gate pass. Record transactions and elapsed time; do not infer qualification. Hands-on: 10-30 minutes.`,
+    `Opportunities cost: edit capital, annual assumption, elapsed days and probability in the detail. Break-even includes fees and opportunity cost. Hands-on: 5 minutes.`,
+    `${shared.exit} Cost: network gas quote. Hands-on: 10-30 minutes.`,
   ];
   return steps;
 }
 
-export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): BoardRow[] {
+export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, fitProof?: any): BoardRow[] {
   const watch = new Set(snapshot.watchlist);
   const index = new Map(snapshot.protocols.map((p) => [p.slug, p]));
   const chosen = new Map<string, SnapshotProtocol>();
@@ -273,13 +281,20 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     const p = index.get(slug);
     if (p) chosen.set(slug, p);
   }
-  const early = snapshot.protocols
-    .filter((p) => !chosen.has(p.slug) && isRankable(p) && p.tvl_usd < snapshot.floor_usd)
-    .sort((a, b) => b.tvl_usd - a.tvl_usd || a.slug.localeCompare(b.slug))
-    .slice(0, EARLY_ROWS);
-  for (const p of early) chosen.set(p.slug, p);
+  const eligible = snapshot.protocols
+    .filter((p) => !chosen.has(p.slug) && isRankable(p))
+    .sort((a, b) => b.tvl_usd - a.tvl_usd || a.slug.localeCompare(b.slug));
+  for (const p of eligible.slice(0, snapshot.protocols.length)) chosen.set(p.slug, p);
 
-  const scored = [...chosen.values()].map((p) => ({ p, v: impliedValue(snapshot, p, model), onWatchlist: watch.has(p.slug) }));
+  const scored = [...chosen.values()].map((p) => {
+    const base = impliedValue(snapshot, p, model);
+    let implied = base.implied;
+    if (fitProof?.parameters) {
+      const selected = valuation.selectedPredict(fitProof.parameters, { category: p.category, tvl_usd: p.tvl_usd, change_7d: p.change_7d, listed_at: p.listed_at });
+      implied = Math.max(1, Math.round(selected));
+    }
+    return { p, v: { ...base, implied }, onWatchlist: watch.has(p.slug) };
+  });
   scored.sort((a, b) => b.v.implied - a.v.implied || a.p.slug.localeCompare(b.p.slug));
 
   return scored.map((s, i) => {
@@ -301,12 +316,12 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     ];
     const caveat = 'No token issuance or future market outcome is inferred. DefiLlama may not have recorded a token; this is an estimate, not an airdrop prediction.';
     const workflowStatus: 'Observational candidate' | 'Workflow unavailable' =
-      p.category && p.category !== 'CEX' ? 'Observational candidate' : 'Workflow unavailable';
+      valuation.planStatus(p.category) === 'Skip' ? 'Workflow unavailable' : 'Observational candidate';
     const sensitivity = {
-      low_usd: Math.max(1, Math.round(v.implied * 0.75)),
+      low_usd: Math.max(1, Math.round(v.implied * (fitProof?.bands?.low ?? 0.75))),
       base_usd: v.implied,
-      high_usd: Math.max(1, Math.round(v.implied * 1.25)),
-      drive: 'TVL and comparable market-cap/TVL ratios, 7-day TVL change, and tracking-age maturity drive the band; 25% is a displayed sensitivity range, not a probability.',
+      high_usd: Math.max(1, Math.round(v.implied * (fitProof?.bands?.high ?? 1.25))),
+      drive: 'Held-out residual 10th/90th ratios supply illustrative bands; they are not confidence intervals or issuance probabilities.',
     };
     return {
       rank: i + 1,
@@ -361,9 +376,30 @@ export function liveRows(snapshot: Snapshot): LiveRow[] {
 }
 
 export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: RadarData } {
-  const board = buildBoard(snapshot, MODEL);
+  const proof = valuation.proof(snapshot);
+  const board = buildBoard(snapshot, MODEL, proof);
   const watch = new Set(snapshot.watchlist);
   const covered = snapshot.watchlist.filter((slug) => board.some((row) => row.slug === slug)).length;
+  const slugs = new Set(board.map((row) => row.slug));
+  const protocolSlugs = new Set(snapshot.protocols.map((p) => p.slug));
+  const coverage = { official: { count: 0, slugs: [] as string[] }, eligible_above_floor: { count: 0, slugs: [] as string[] }, eligible_early: { count: 0, slugs: [] as string[] }, recorded_traded: { count: 0, slugs: [] as string[] }, set_aside: { count: 0, slugs: [] as string[], reasons: {} as Record<string, number> } };
+  for (const p of snapshot.protocols) {
+    if (watch.has(p.slug)) { coverage.official.count++; coverage.official.slugs.push(p.slug); continue; }
+    if (!isPreToken(p)) { coverage.recorded_traded.count++; coverage.recorded_traded.slugs.push(p.slug); continue; }
+    if (!isRankable(p)) {
+      coverage.set_aside.count++; coverage.set_aside.slugs.push(p.slug);
+      let reason = 'derivative_or_other_exclusion';
+      if (p.category && ['CEX','Bridge','Canonical Bridge','Liquid Staking','Liquid Restaking','Restaked BTC'].includes(p.category)) reason = 'blocked_category';
+      else if (/\s(V\d+(?:\.\d+)?|v\d+(?:\.\d+)?|\d+\.\d+)$/.test(p.name)) reason = 'version_marker';
+      else if (/\b(receipt|wrapped|staking|staked)\b/.test(p.name.toLowerCase())) reason = 'wrapped_staked_receipt';
+      else if (/^w[a-z]{2,}[0-9]*\b/.test(p.name.toLowerCase()) || /^w[a-z]+\b.*(eth|btc|usd)/.test(p.name.toLowerCase())) reason = 'derivative_name';
+      coverage.set_aside.reasons[reason] = (coverage.set_aside.reasons[reason] ?? 0) + 1;
+      continue;
+    }
+    if (p.tvl_usd >= snapshot.floor_usd) { coverage.eligible_above_floor.count++; coverage.eligible_above_floor.slugs.push(p.slug); }
+    else { coverage.eligible_early.count++; coverage.eligible_early.slugs.push(p.slug); }
+  }
+  const totalAccounted = coverage.official.count + coverage.eligible_above_floor.count + coverage.eligible_early.count + coverage.recorded_traded.count + coverage.set_aside.count;
   const radar: RadarData = {
     as_of: snapshot.as_of,
     source: snapshot.source,
@@ -379,6 +415,9 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     coverage: { covered, total: snapshot.watchlist.length, full: covered === snapshot.watchlist.length, watchlist: snapshot.watchlist },
     rows: board,
     live: liveRows(snapshot),
+    full_coverage: { total: snapshot.protocols.length, accounted: totalAccounted, unique: new Set([...coverage.official.slugs,...coverage.eligible_above_floor.slugs,...coverage.eligible_early.slugs,...coverage.recorded_traded.slugs,...coverage.set_aside.slugs]).size, full: totalAccounted === snapshot.protocols.length && totalAccounted === protocolSlugs.size, partitions: coverage, no_token_is_not_verified_absence: true },
+    valuation_proof: proof,
+    canonical_plan_status: 'Scenario control changes planning math only; canonical rank/value remain unchanged.',
   };
   return { board, radar };
 }
@@ -431,6 +470,52 @@ export function boardIssue(board: BoardRow[], snapshot: Snapshot): string | null
   return null;
 }
 
-export function dataScript(radar: RadarData): string {
-  return `window.RADAR=${JSON.stringify(radar)};\n`;
+export function dataScript(radar: RadarData, exportedTriples?: [number, string, number][]): string {
+  const full = radar.full_coverage;
+  const fp = {
+    official: { count: full.partitions.official.count },
+    eligible_above_floor: { count: full.partitions.eligible_above_floor.count },
+    eligible_early: { count: full.partitions.eligible_early.count },
+    recorded_traded: { count: full.partitions.recorded_traded.count },
+    set_aside: { count: full.partitions.set_aside.count, reasons: full.partitions.set_aside.reasons },
+  };
+  const proof = radar.valuation_proof;
+  const proofOptions: any = {};
+  for (const key of Object.keys(proof.options || {})) {
+    const o = proof.options[key];
+    proofOptions[key] = { median_multiplicative_error: o.median_multiplicative_error, rank_correlation: o.rank_correlation, n: o.n };
+  }
+  const proofCompact = {
+    peer_count: proof.peer_count,
+    peers: proof.peers,
+    options: proofOptions,
+    selected: proof.selected,
+    parameters: proof.parameters ? { beta: proof.parameters.beta, categories: proof.parameters.categories, option: proof.parameters.option, asOf: proof.parameters.asOf, peers: proof.parameters.option?.name === 'v2-category-global-blend-growth-age' ? proof.parameters.peers : undefined } : null,
+    held_out: proof.held_out ? { median_multiplicative_error: proof.held_out.median_multiplicative_error, rank_correlation: proof.held_out.rank_correlation, n: proof.held_out.n } : null,
+    bands: proof.bands,
+    older_to_newer: proof.older_to_newer ? { median_multiplicative_error: proof.older_to_newer.median_multiplicative_error, rank_correlation: proof.older_to_newer.rank_correlation, n: proof.older_to_newer.n } : null,
+    newer_to_older: proof.newer_to_older ? { median_multiplicative_error: proof.newer_to_older.median_multiplicative_error, rank_correlation: proof.newer_to_older.rank_correlation, n: proof.newer_to_older.n } : null,
+  };
+  const compact = {
+    as_of: radar.as_of,
+    source: radar.source,
+    floor_usd: radar.floor_usd,
+    model: radar.model,
+    model_version: radar.model_version,
+    board_size: radar.board_size,
+    watchlist_size: radar.watchlist_size,
+    early_size: radar.early_size,
+    live_size: radar.live_size,
+    coverage: radar.coverage,
+    full_coverage: { total: full.total, accounted: full.accounted, unique: full.unique, full: full.full, partitions: fp, no_token_is_not_verified_absence: true },
+    valuation_proof: proofCompact,
+    canonical_plan_status: radar.canonical_plan_status,
+    board_triples: exportedTriples ?? radar.rows.map((r) => [r.rank, r.slug, r.implied_value_usd]),
+    rows: radar.rows.map((r) => [r.rank,r.slug,r.name,r.category,r.chains,r.tvl_usd,r.change_7d,r.age_days,r.watchlist,r.implied_value_usd,r.comparable_ratio,r.listed_at]),
+    live: radar.live.map((r) => [r.slug,r.name,r.category,r.chains,r.tvl_usd,r.mcap_usd,r.change_7d,r.symbol]),
+  };
+  const packed = gzipSync(Buffer.from(JSON.stringify(compact), 'utf8')).toString('base64');
+  const lines: string[] = [];
+  for (let i = 0; i < packed.length; i += 100) lines.push(packed.slice(i, i + 100));
+  return `window.RADAR_PACKED=[\n${lines.map((line) => `  ${JSON.stringify(line)}`).join(',\n')}\n];\n`;
 }

@@ -16,7 +16,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { boardIssue, buildRadar, dataScript, parseSnapshot } from './lib/model.ts';
+import { boardIssue, buildRadar, dataScript, parseSnapshot, type BoardRow } from './lib/model.ts';
 import { buildDossier } from './vendor/makefun-board.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
@@ -51,7 +51,16 @@ if (issue !== null) {
 }
 
 mkdirSync(out, { recursive: true });
-writeFileSync(join(out, 'board.json'), `${JSON.stringify({ rows: board })}\n`);
+const boardPath = join(out, 'board.json');
+writeFileSync(boardPath, `${JSON.stringify({ rows: board })}\n`);
+const boardBytes = readFileSync(boardPath, 'utf8');
+let exportedBoard: { rows: BoardRow[] };
+try {
+  exportedBoard = JSON.parse(boardBytes) as { rows: BoardRow[] };
+} catch {
+  throw new Error('main: exported board.json bytes are not valid JSON');
+}
+const exportedTriples: [number, string, number][] = exportedBoard.rows.map((r) => [r.rank, r.slug, r.implied_value_usd]);
 /** Copy one directory's regular files into `to`, skipping names that start with a dot. */
 function copyFiles(from: string, to: string): string[] {
   if (!existsSync(from)) return [];
@@ -68,7 +77,7 @@ function copyFiles(from: string, to: string): string[] {
 }
 
 copyFiles(join(here, 'dashboard'), join(out, 'dashboard'));
-writeFileSync(join(out, 'dashboard', 'z-data.js'), dataScript(radar));
+writeFileSync(join(out, 'dashboard', 'z-data.js'), dataScript(radar, exportedTriples));
 const shots = copyFiles(join(here, 'screenshots'), join(out, 'screenshots'));
 if (shots.length < 3) {
   process.stderr.write(`token radar: screenshots/ holds ${shots.length} image${shots.length === 1 ? '' : 's'}: hand in 3, the board, a detail view and a filtered view\n`);
@@ -85,6 +94,6 @@ for (const name of shots) {
 writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEXT_MAX_BYTES, screenshots: SCREENSHOT_CAPS, dashboard: { max_files: 400, max_bytes: 4_194_304 } }));
 
 process.stdout.write(
-  `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside)\n` +
+  `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.full_coverage.partitions.eligible_above_floor.count} above-floor, ${radar.full_coverage.partitions.eligible_early.count} early, ${radar.live_size} live set aside)\n` +
     `token radar: wrote ${join(out, 'board.json')}, ${join(out, 'dashboard/z-data.js')}, ${join(out, 'dashboard')} (4 source files), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
 );
